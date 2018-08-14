@@ -47,6 +47,12 @@ var cache = {};
 
 var defaultTemplate = join(__dirname, 'public', 'directory.html');
 var templates = {
+  plain: {
+    page: '{files}\n',
+    list: '{header}{items}',
+    header: '',
+    item: '{file.name}\n'
+  },
   html: {
     list: '<ul id="files" class="view-{view}">{header}{items}</ul>',
     header: '<li class="header">'
@@ -223,6 +229,8 @@ function serveIndex(root, options) {
             view: view,
             // path to template
             template: template,
+            // string templates
+            templates: templates,
             // path to stylesheet
             stylesheet: stylesheet
           })
@@ -255,11 +263,15 @@ serveIndex.html = function _html(req, res, directory, files, next, options) {
     var locals = {
       directory: directory.name,
       displayIcons: Boolean(icons),
+      escape: escapeHtml,
       fileList: files,
+      isHtml: true,
       path: path,
       style: style,
+      templates: options.templates.html,
       viewName: view
     };
+    locals.style = locals.style.concat(iconStyle(locals.fileList, locals.displayIcons))
 
     // render html
     render(locals, function (err, body) {
@@ -282,9 +294,19 @@ serveIndex.json = function _json(req, res, directory, nodes) {
  * Respond with text/plain.
  */
 
-serveIndex.plain = function _plain(req, res, directory, nodes) {
-  var files = nodes.map(function (file) { return file.name })
-  send(res, 'text/plain', (files.join('\n') + '\n'))
+serveIndex.plain = function _plain(req, res, directory, nodes, next, options) {
+
+  // create locals for rendering
+  var locals = {
+    directory: directory.name,
+    displayIcons: Boolean(icons),
+    fileList: nodes,
+    path: options.path,
+    templates: options.templates.plain,
+    viewName: options.view
+  };
+
+  send(res, 'text/plain', renderTemplate(locals.templates.page, locals))
 }
 
 /**
@@ -292,10 +314,13 @@ serveIndex.plain = function _plain(req, res, directory, nodes) {
  * @private
  */
 
-function createHtmlFileList(files, dirname, useIcons, view) {
-  var html = templates.html.list
+function createFileList(files, dirname, options) {
+  var escape = options.escape
+  var useIcons = options.displayIcons
+  var view = options.viewName
+  var html = options.templates.list
     .replace(/{view}/g, view)
-    .replace(/{header}/g, view === 'details' ? templates.html.header : '')
+    .replace(/{header}/g, view === 'details' ? options.templates.header : '')
 
   var items = files.map(function (file) {
     var classes = [];
@@ -329,12 +354,12 @@ function createHtmlFileList(files, dirname, useIcons, view) {
       ? file.size
       : '';
 
-    return templates.html.item
-      .replace(/{path}/g, escapeHtml(normalizeSlashes(normalize(path.join('/')))))
-      .replace(/{classes}/g, escapeHtml(classes.join(' ')))
-      .replace(/{file\.name}/g, escapeHtml(file.name))
-      .replace(/{file\.size}/g, escapeHtml(size))
-      .replace(/{file\.lastModified/g, escapeHtml(date))
+    return options.templates.item
+      .replace(/{path}/g, escape(normalizeSlashes(normalize(path.join('/')))))
+      .replace(/{classes}/g, escape(classes.join(' ')))
+      .replace(/{file\.name}/g, escape(file.name))
+      .replace(/{file\.size}/g, escape(size))
+      .replace(/{file\.lastModified/g, escape(date))
   }).join('\n');
 
   return html.replace(/{items}/g, items)
@@ -350,15 +375,28 @@ function createHtmlRender(template) {
     fs.readFile(template, 'utf8', function (err, str) {
       if (err) return callback(err);
 
-      var body = str
-        .replace(/{style}/g, locals.style.concat(iconStyle(locals.fileList, locals.displayIcons)))
-        .replace(/{files}/g, createHtmlFileList(locals.fileList, locals.directory, locals.displayIcons, locals.viewName))
-        .replace(/{directory}/g, escapeHtml(locals.directory))
-        .replace(/{linked-path}/g, htmlPath(locals.directory))
+      var body = renderTemplate(str, locals)
 
       callback(null, body);
     });
   };
+}
+
+/**
+ * Generic template renderer.
+ */
+function renderTemplate(str, locals) {
+  var escape = locals.escape || (locals.isHtml ? escapeHtml : function (x) { return x })
+  return str
+    .replace(/{style}/g, locals.style)
+    .replace(/{files}/g, createFileList(locals.fileList, locals.directory, {
+      displayIcons: locals.displayIcons,
+      escape: escape,
+      templates: locals.templates,
+      viewName: locals.viewName
+    }))
+    .replace(/{directory}/g, escape(locals.directory))
+    .replace(/{linked-path}/g, htmlPath(locals.directory))
 }
 
 /**
